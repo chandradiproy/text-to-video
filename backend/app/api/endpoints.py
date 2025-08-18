@@ -1,32 +1,36 @@
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.services.video_service import generate_video_from_prompt
 
 router = APIRouter()
 
-class VideoRequest(BaseModel):
-    prompt: str
-
-class VideoResponse(BaseModel):
-    image: str # base64 encoded image
-    video: str # base64 encoded video
-
-@router.post("/generate-video", response_model=VideoResponse)
-async def create_video(request: VideoRequest):
+@router.websocket("/ws/generate-video")
+async def websocket_endpoint(websocket: WebSocket):
     """
-    Endpoint to generate a video from a text prompt.
-    It calls the video generation service and returns the result.
+    WebSocket endpoint for real-time video generation.
+    Receives a prompt and style, then streams status updates and the final video.
     """
+    await websocket.accept()
     try:
-        print(f"Received request to generate video for prompt: '{request.prompt}'")
-        # The 'await' keyword is crucial here for async functions
-        result = await generate_video_from_prompt(request.prompt)
-        print("Successfully generated video. Returning data.")
-        return result
-    except HTTPException as e:
-        # Re-raise HTTP exceptions from the service layer
-        raise e
+        while True:
+            # Wait for a message from the client (prompt and style)
+            data = await websocket.receive_json()
+            prompt = data.get("prompt")
+            style = data.get("style")
+
+            if prompt and style:
+                # Call the service function to handle the generation process
+                await generate_video_from_prompt(prompt, style, websocket)
+            else:
+                await websocket.send_json({"error": "Prompt and style are required."})
+
+    except WebSocketDisconnect:
+        print("Client disconnected")
     except Exception as e:
-        print(f"An unexpected error occurred during video generation: {e}")
-        # Handle any other unexpected errors
-        raise HTTPException(status_code=500, detail=str(e))
+        error_message = f"An error occurred in the WebSocket endpoint: {e}"
+        print(error_message)
+        try:
+            # Attempt to send an error message before closing if the socket is still open
+            await websocket.send_json({"error": f"A server error occurred: {e}"})
+        except Exception as send_error:
+            print(f"Failed to send error message to client: {send_error}")
+

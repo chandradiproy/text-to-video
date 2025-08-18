@@ -1,122 +1,320 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
+import { ToastContainer, toast } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
 
 function App() {
   const [prompt, setPrompt] = useState('');
+  const [style, setStyle] = useState('Cinematic');
   const [video, setVideo] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [status, setStatus] = useState('Ready');
+  const [status, setStatus] = useState('Ready to generate your video');
+  const [progress, setProgress] = useState(0);
 
-  const handleSubmit = async (e) => {
+  const websocket = useRef(null);
+
+  // Effect to show toast notification when an error occurs
+  useEffect(() => {
+    if (error) {
+      toast.error(error);
+      setError(null); // Reset error after showing toast
+    }
+  }, [error]);
+
+  // Simulate progress for better UX
+  useEffect(() => {
+    let interval;
+    if (loading) {
+      interval = setInterval(() => {
+        setProgress((prev) => {
+          if (prev >= 90) return prev;
+          return prev + Math.random() * 10;
+        });
+      }, 1000);
+    } else {
+      setProgress(0);
+    }
+    return () => clearInterval(interval);
+  }, [loading]);
+
+  const handleSubmit = (e) => {
     e.preventDefault();
-    if (!prompt) {
-      setError('Please enter a prompt.');
+    if (!prompt.trim()) {
+      setError('Please enter a valid prompt.');
       return;
     }
 
     setLoading(true);
-    setError(null);
     setVideo(null);
-    setStatus('Sending prompt to the AI model...');
+    setProgress(0);
+    setStatus('Connecting to AI server...');
 
-    try {
-      const response = await fetch('http://localhost:8000/api/v1/generate-video', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ prompt }),
-      });
+    // websocket.current = new WebSocket('ws://localhost:8000/api/v1/ws/generate-video');
+    
+    websocket.current = new WebSocket('wss://text-to-video-p960.onrender.com/api/v1/ws/generate-video');
+    websocket.current.onopen = () => {
+      console.log("WebSocket connection established.");
+      setStatus('Connected! Sending your prompt...');
+      websocket.current.send(JSON.stringify({ prompt, style }));
+    };
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Something went wrong');
+    websocket.current.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      
+      if (data.status) {
+        setStatus(data.status);
       }
-
-      setStatus('Processing video... This may take a moment.');
-      const data = await response.json();
       
       if (data.video) {
         setVideo(`data:video/mp4;base64,${data.video}`);
+        setLoading(false);
+        setProgress(100);
         setStatus('Video generated successfully!');
-      } else {
-        throw new Error("No video data received from the server.");
+        websocket.current.close();
       }
+      
+      if (data.error) {
+        setError(data.error); // Set error state to trigger toast
+        setStatus('Generation failed. Please try again.');
+        setLoading(false);
+      }
+    };
 
-    } catch (err) {
-      setError(err.message);
-      setStatus('An error occurred.');
-    } finally {
+    websocket.current.onerror = (event) => {
+      console.error("WebSocket error:", event);
+      setError('Unable to connect to server. Is it running?');
       setLoading(false);
-    }
+      setStatus('Connection failed');
+    };
+
+    websocket.current.onclose = () => {
+      console.log("WebSocket connection closed.");
+      if (loading) {
+        setLoading(false);
+        setStatus('Connection interrupted');
+      }
+    };
+  };
+
+  const clearVideo = () => {
+    setVideo(null);
+    setStatus('Ready to generate your video');
   };
 
   return (
-    // Set a fixed screen height to prevent the body's scrollbar
-    <div className="h-screen bg-gray-900 text-white flex flex-col items-center justify-center p-4">
-      {/* Reduced vertical padding */}
-      <div className="w-full max-w-2xl bg-gray-800 rounded-lg shadow-xl p-6">
-        <h1 className="text-4xl font-bold text-center mb-2 text-cyan-400">AI Video Generator</h1>
-        {/* Reduced bottom margin */}
-        <p className="text-center text-gray-400 mb-4">Enter a prompt to generate a short video with a Hugging Face model.</p>
-        
-        <form onSubmit={handleSubmit}>
-          {/* Fixed responsive layout for the form */}
-          <div className="flex flex-col sm:flex-row gap-4 mb-4">
-            <input
-              type="text"
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="e.g., An astronaut riding a horse on the moon"
-              className="flex-grow bg-gray-700 text-white rounded-md p-3 focus:outline-none focus:ring-2 focus:ring-cyan-500"
-              disabled={loading}
-            />
-            <button
-              type="submit"
-              className="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-3 px-6 rounded-md transition duration-300 ease-in-out disabled:bg-gray-500 disabled:cursor-not-allowed"
-              disabled={loading}
-            >
-              {loading ? 'Generating...' : 'Generate'}
-            </button>
+    <>
+      {/* Toast Container for displaying notifications */}
+      <ToastContainer
+        position="top-right"
+        autoClose={5000}
+        hideProgressBar={false}
+        newestOnTop={false}
+        closeOnClick
+        rtl={false}
+        pauseOnFocusLoss
+        draggable
+        pauseOnHover
+        theme="dark"
+      />
+      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 text-white">
+        {/* Header */}
+        <div className="pt-8 pb-4 px-4">
+          <div className="max-w-4xl mx-auto text-center">
+            <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-600 bg-clip-text text-transparent mb-3">
+              AI Video Generator
+            </h1>
+            <p className="text-gray-300 text-lg md:text-xl max-w-2xl mx-auto leading-relaxed">
+              Transform your ideas into stunning videos with the power of AI
+            </p>
           </div>
-        </form>
-
-        {error && <div className="bg-red-500/20 text-red-300 p-3 rounded-md mt-4 text-center">{error}</div>}
-
-        {/* Reduced top margin and minimum height */}
-        <div className="mt-4 p-4 bg-gray-700/50 rounded-lg min-h-[64px] flex items-center justify-center">
-            {/* -- ENHANCED LOADING INDICATOR -- */}
-            {loading && (
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="animate-spin mr-3 text-cyan-400">
-                    <path d="M5 22h14"/>
-                    <path d="M5 2h14"/>
-                    <path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/>
-                    <path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/>
-                </svg>
-            )}
-            <p className="text-gray-300 font-mono">{status}</p>
         </div>
 
-        {/* Reduced top margin */}
-        <div className="mt-4 flex flex-col items-center">
-            <h2 className="text-2xl font-semibold mb-4 text-cyan-300">Generated Video</h2>
-            {/* Reduced height of the video container */}
-            <div className="w-full h-64 bg-gray-700 rounded-lg flex items-center justify-center overflow-hidden">
-                {loading && (
-                  <div className="flex flex-col items-center">
-                    <div className="loader"></div>
-                    <p className="text-gray-400 mt-4">AI is thinking...</p>
+        {/* Main Content */}
+        <div className="px-4 pb-8">
+          <div className="max-w-4xl mx-auto">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+              
+              {/* Input Section */}
+              <div className="bg-gray-800/50 backdrop-blur-sm rounded-2xl shadow-2xl border border-gray-700/50 p-6 md:p-8">
+                <form onSubmit={handleSubmit} className="space-y-6">
+                  
+                  {/* Prompt Input */}
+                  <div className="space-y-3">
+                    <label htmlFor="prompt" className="block text-sm font-semibold text-cyan-300 uppercase tracking-wide">
+                      Your Creative Prompt
+                    </label>
+                    <div className="relative">
+                      <textarea
+                        id="prompt"
+                        value={prompt}
+                        onChange={(e) => setPrompt(e.target.value)}
+                        placeholder="Describe your vision... e.g., A majestic dragon soaring through clouds at sunset"
+                        rows={4}
+                        className="w-full bg-gray-700/70 text-white rounded-xl p-4 focus:outline-none focus:ring-3 focus:ring-cyan-500/50 focus:bg-gray-700 transition-all duration-300 border border-gray-600/50 resize-none placeholder-gray-400"
+                        disabled={loading}
+                      />
+                      <div className="absolute bottom-3 right-3 text-xs text-gray-400">
+                        {prompt.length}/500
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Style Selection */}
+                  <div className="space-y-3">
+                    <label htmlFor="style" className="block text-sm font-semibold text-cyan-300 uppercase tracking-wide">
+                      Video Style
+                    </label>
+                    <select
+                      id="style"
+                      value={style}
+                      onChange={(e) => setStyle(e.target.value)}
+                      className="w-full bg-gray-700/70 text-white rounded-xl p-4 focus:outline-none focus:ring-3 focus:ring-cyan-500/50 focus:bg-gray-700 transition-all duration-300 border border-gray-600/50 cursor-pointer"
+                      disabled={loading}
+                    >
+                      <option value="Default">Default</option>
+                      <option value="Cinematic">Cinematic</option>
+                      <option value="Anime">Anime</option>
+                      <option value="Pixel Art">Pixel Art</option>
+                      <option value="Documentary">Documentary</option>
+                      <option value="Fantasy">Fantasy</option>
+                      <option value="Sci-Fi">Sci-Fi</option>
+                    </select>
+                  </div>
+
+                  {/* Generate Button */}
+                  <button
+                    type="submit"
+                    disabled={loading || !prompt.trim()}
+                    className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-600 hover:to-blue-700 disabled:from-gray-600 disabled:to-gray-700 text-white font-bold py-4 px-6 rounded-xl transition-all duration-300 ease-in-out disabled:cursor-not-allowed transform hover:scale-[1.02] hover:shadow-lg hover:shadow-cyan-500/25 disabled:scale-100 disabled:shadow-none"
+                  >
+                    {loading ? (
+                      <div className="flex items-center justify-center space-x-3">
+                        <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
+                        </svg>
+                        <span>Generating Magic...</span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-center space-x-2">
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.828 14.828a4 4 0 01-5.656 0M9 10h1m4 0h1m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                        <span>Generate Video</span>
+                      </div>
+                    )}
+                  </button>
+                </form>
+
+                {/* Status Section */}
+                {(loading || status !== 'Ready to generate your video') && (
+                  <div className="mt-6 p-4 bg-gray-700/30 rounded-xl border border-gray-600/30">
+                    <div className="flex items-center space-x-3 mb-3">
+                      {loading && (
+                        <div className="w-2 h-2 bg-cyan-400 rounded-full animate-pulse"></div>
+                      )}
+                      <span className="text-sm font-medium text-gray-300">{status}</span>
+                    </div>
+                    
+                    {loading && (
+                      <div className="w-full bg-gray-600 rounded-full h-2 overflow-hidden">
+                        <div 
+                          className="bg-gradient-to-r from-cyan-500 to-blue-500 h-full rounded-full transition-all duration-500 ease-out"
+                          style={{ width: `${Math.min(progress, 100)}%` }}
+                        ></div>
+                      </div>
+                    )}
                   </div>
                 )}
-                {video ? (
-                    <video controls autoPlay loop src={video} className="w-full h-full object-contain" />
-                ) : (
-                    !loading && <p className="text-gray-500">Video will appear here</p>
+              </div>
+
+              {/* Video Display Section */}
+              <div className="bg-gray-800/50 backdrop-blur-sm rounded-2xl shadow-2xl border border-gray-700/50 p-6 md:p-8">
+                <div className="flex items-center justify-between mb-6">
+                  <h2 className="text-xl font-bold text-cyan-300">Generated Video</h2>
+                  {video && (
+                    <button
+                      onClick={clearVideo}
+                      className="text-gray-400 hover:text-white transition-colors duration-200 p-2 hover:bg-gray-700/50 rounded-lg"
+                      title="Clear video"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+
+                <div className="relative">
+                  <div className="w-full aspect-video bg-gray-700/50 rounded-xl border-2 border-dashed border-gray-600/50 flex items-center justify-center overflow-hidden">
+                    {loading ? (
+                      <div className="flex flex-col items-center space-y-4 p-8 text-center">
+                        <div className="relative">
+                          <div className="w-16 h-16 border-4 border-gray-600 border-t-cyan-400 rounded-full animate-spin"></div>
+                          <div className="absolute inset-0 w-16 h-16 border-4 border-transparent border-r-blue-400 rounded-full animate-spin animation-delay-75"></div>
+                        </div>
+                        <div>
+                          <p className="text-gray-300 font-medium">AI is creating your video...</p>
+                          <p className="text-gray-400 text-sm mt-1">This may take a few moments</p>
+                        </div>
+                      </div>
+                    ) : video ? (
+                      <div className="w-full h-full relative group">
+                        <video 
+                          controls 
+                          autoPlay 
+                          loop 
+                          src={video} 
+                          className="w-full h-full object-contain rounded-lg"
+                        />
+                        <div className="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                          <a 
+                            href={video} 
+                            download="ai-generated-video.mp4"
+                            className="bg-black/50 backdrop-blur-sm text-white px-3 py-2 rounded-lg text-sm hover:bg-black/70 transition-colors duration-200 flex items-center space-x-2"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            </svg>
+                            <span>Download</span>
+                          </a>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-center p-8">
+                        <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-gray-700/50 flex items-center justify-center">
+                          <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                          </svg>
+                        </div>
+                        <p className="text-gray-400 font-medium">Your video will appear here</p>
+                        <p className="text-gray-500 text-sm mt-1">Enter a prompt and click generate to start</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Video Info */}
+                {video && (
+                  <div className="mt-4 p-4 bg-gray-700/30 rounded-xl">
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <span className="text-gray-400">Style:</span>
+                        <span className="text-white ml-2 font-medium">{style}</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-400">Status:</span>
+                        <span className="text-green-400 ml-2 font-medium">Ready</span>
+                      </div>
+                    </div>
+                  </div>
                 )}
+              </div>
             </div>
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }
 
