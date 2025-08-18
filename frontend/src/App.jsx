@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { ToastContainer, toast } from 'react-toastify';
-import 'react-toastify/dist/ReactToastify.css';
+// The CSS import is removed from here and moved to main.jsx
 
 function App() {
   const [prompt, setPrompt] = useState('');
@@ -13,11 +13,30 @@ function App() {
 
   const websocket = useRef(null);
 
+  // --- Wake up the backend on initial page load ---
+  useEffect(() => {
+    // Use process.env for environment variables
+    const wsUrl = process.env.VITE_WEBSOCKET_URL || 'ws://localhost:8000/api/v1/ws/generate-video';
+    const httpUrl = wsUrl.replace('wss://', 'https://').replace('ws://', 'http://').split('/api/v1/ws/generate-video')[0];
+    const healthCheckUrl = `${httpUrl}/api/v1/health`;
+
+    console.log("Pinging backend to wake it up...");
+    fetch(healthCheckUrl)
+      .then(res => {
+        if (res.ok) {
+          console.log("Backend is awake.");
+        } else {
+          console.warn("Backend ping failed, it might be starting up.");
+        }
+      })
+      .catch(err => console.error("Error pinging backend:", err));
+  }, []); // Empty dependency array ensures this runs only once on mount
+
   // Effect to show toast notification when an error occurs
   useEffect(() => {
     if (error) {
       toast.error(error);
-      setError(null); // Reset error after showing toast
+      setError(null);
     }
   }, [error]);
 
@@ -49,9 +68,9 @@ function App() {
     setProgress(0);
     setStatus('Connecting to AI server...');
 
-    // websocket.current = new WebSocket('ws://localhost:8000/api/v1/ws/generate-video');
-    
-    websocket.current = new WebSocket('wss://text-to-video-p960.onrender.com/api/v1/ws/generate-video');
+    const wsUrl = process.env.VITE_WEBSOCKET_URL || 'ws://localhost:8000/api/v1/ws/generate-video';
+    websocket.current = new WebSocket(wsUrl);
+
     websocket.current.onopen = () => {
       console.log("WebSocket connection established.");
       setStatus('Connected! Sending your prompt...');
@@ -74,7 +93,7 @@ function App() {
       }
       
       if (data.error) {
-        setError(data.error); // Set error state to trigger toast
+        setError(data.error);
         setStatus('Generation failed. Please try again.');
         setLoading(false);
       }
@@ -103,7 +122,6 @@ function App() {
 
   return (
     <>
-      {/* Toast Container for displaying notifications */}
       <ToastContainer
         position="top-right"
         autoClose={5000}

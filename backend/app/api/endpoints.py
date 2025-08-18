@@ -3,6 +3,16 @@ from app.services.video_service import generate_video_from_prompt
 
 router = APIRouter()
 
+
+@router.get("/health")
+async def health_check():
+    """
+    A simple endpoint to check if the server is running.
+    Used to "wake up" the service from a cold start.
+    """
+    return {"status": "ok"}
+
+
 @router.websocket("/ws/generate-video")
 async def websocket_endpoint(websocket: WebSocket):
     """
