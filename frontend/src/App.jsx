@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { ToastContainer, toast } from 'react-toastify';
-// The CSS import is removed from here and moved to main.jsx
+// CSS is correctly imported in main.jsx, so it's removed from here.
 
 function App() {
   const [prompt, setPrompt] = useState('');
@@ -13,30 +13,31 @@ function App() {
 
   const websocket = useRef(null);
 
-  // --- Wake up the backend on initial page load ---
+  // --- NEW: Wake up the backend on initial page load ---
   useEffect(() => {
-    // Use process.env for environment variables
-    const wsUrl = "wss://text-to-video-p960.onrender.com/api/v1/ws/generate-video"
-    const httpUrl = wsUrl.replace('wss://', 'https://').replace('ws://', 'http://').split('/api/v1/ws/generate-video')[0];
+    const wsUrl = 'wss://text-to-video-p960.onrender.com/api/v1/ws/generate-video';
+    // Derive the HTTP URL from the WebSocket URL for the health check
+    const httpUrl = wsUrl.replace('wss://', 'https://').split('/api/v1/ws/generate-video')[0];
     const healthCheckUrl = `${httpUrl}/api/v1/health`;
 
     console.log("Pinging backend to wake it up...");
     fetch(healthCheckUrl)
       .then(res => {
         if (res.ok) {
-          console.log("Backend is awake.");
+          console.log("Backend is awake and ready.");
         } else {
-          console.warn("Backend ping failed, it might be starting up.");
+          console.warn("Backend ping failed. The server might be starting up from a cold start.");
         }
       })
       .catch(err => console.error("Error pinging backend:", err));
-  }, []); // Empty dependency array ensures this runs only once on mount
+  }, []); // The empty dependency array ensures this runs only once.
+
 
   // Effect to show toast notification when an error occurs
   useEffect(() => {
     if (error) {
       toast.error(error);
-      setError(null);
+      setError(null); // Reset error after showing toast
     }
   }, [error]);
 
@@ -67,10 +68,8 @@ function App() {
     setVideo(null);
     setProgress(0);
     setStatus('Connecting to AI server...');
-
-    const wsUrl = "wss://text-to-video-p960.onrender.com/api/v1/ws/generate-video";
-    websocket.current = new WebSocket(wsUrl);
-
+    
+    websocket.current = new WebSocket('wss://text-to-video-p960.onrender.com/api/v1/ws/generate-video');
     websocket.current.onopen = () => {
       console.log("WebSocket connection established.");
       setStatus('Connected! Sending your prompt...');
@@ -93,7 +92,7 @@ function App() {
       }
       
       if (data.error) {
-        setError(data.error);
+        setError(data.error); // Set error state to trigger toast
         setStatus('Generation failed. Please try again.');
         setLoading(false);
       }
@@ -122,6 +121,7 @@ function App() {
 
   return (
     <>
+      {/* Toast Container for displaying notifications */}
       <ToastContainer
         position="top-right"
         autoClose={5000}
