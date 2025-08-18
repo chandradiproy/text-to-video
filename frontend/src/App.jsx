@@ -16,7 +16,7 @@ function App() {
   // --- Wake up the backend on initial page load ---
   useEffect(() => {
     // Use process.env for environment variables
-    const wsUrl = process.env.VITE_WEBSOCKET_URL || 'ws://localhost:8000/api/v1/ws/generate-video';
+    const wsUrl = "wss://text-to-video-p960.onrender.com/api/v1/ws/generate-video"
     const httpUrl = wsUrl.replace('wss://', 'https://').replace('ws://', 'http://').split('/api/v1/ws/generate-video')[0];
     const healthCheckUrl = `${httpUrl}/api/v1/health`;
 
@@ -68,7 +68,7 @@ function App() {
     setProgress(0);
     setStatus('Connecting to AI server...');
 
-    const wsUrl = process.env.VITE_WEBSOCKET_URL || 'ws://localhost:8000/api/v1/ws/generate-video';
+    const wsUrl = "wss://text-to-video-p960.onrender.com/api/v1/ws/generate-video";
     websocket.current = new WebSocket(wsUrl);
 
     websocket.current.onopen = () => {
