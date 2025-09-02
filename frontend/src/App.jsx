@@ -15,9 +15,10 @@ function App() {
 
   // --- NEW: Wake up the backend on initial page load ---
   useEffect(() => {
-    const wsUrl = 'wss://text-to-video-p960.onrender.com/api/v1/ws/generate-video';
+    // const wsUrl = 'wss://text-to-video-p960.onrender.com/api/v1/ws/generate-video';
+    const wsUrl = 'wss://localhost:8000/api/v1/ws/generate-video';
     // Derive the HTTP URL from the WebSocket URL for the health check
-    const httpUrl = wsUrl.replace('wss://', 'https://').split('/api/v1/ws/generate-video')[0];
+    const httpUrl = wsUrl.replace('ws://', 'https://').split('/api/v1/ws/generate-video')[0];
     const healthCheckUrl = `${httpUrl}/api/v1/health`;
 
     console.log("Pinging backend to wake it up...");
@@ -70,6 +71,7 @@ function App() {
     setStatus('Connecting to AI server...');
     
     websocket.current = new WebSocket('wss://text-to-video-p960.onrender.com/api/v1/ws/generate-video');
+    // websocket.current = new WebSocket('ws://localhost:8000/api/v1/ws/generate-video');
     websocket.current.onopen = () => {
       console.log("WebSocket connection established.");
       setStatus('Connected! Sending your prompt...');

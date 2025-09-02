@@ -24,6 +24,7 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             # Wait for a message from the client (prompt and style)
             data = await websocket.receive_json()
+            
             prompt = data.get("prompt")
             style = data.get("style")
 
