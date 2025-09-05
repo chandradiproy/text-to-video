@@ -13,76 +13,66 @@ Built with a decoupled architecture, the system features a React frontend and a 
 ```mermaid
 graph TD
     subgraph "User Interfaces"
-        WebAppUser[<fa:fa-user> Web App User]
-        WhatsAppUser[<fa:fa-user-friends> WhatsApp User]
+        WebAppUser["Web App User"]
+        WhatsAppUser["WhatsApp User"]
     end
 
     subgraph "Frontend Clients"
-        WebApp[<fa:fa-react> React Web App on Vercel]
-        WhatsAppPlatform[<fa:fa-whatsapp> WhatsApp Platform]
+        WebApp["React Web App on Vercel"]
+        WhatsAppPlatform["WhatsApp Platform"]
     end
 
-    subgraph "Backend Service (on Render/Railway)"
-        FastAPI[<fa:fa-server> FastAPI Application]
+    subgraph "Backend Service"
+        FastAPI["FastAPI Application"]
         
         subgraph "API Endpoints"
-            WSEndpoint[<fa:fa-plug> WebSocket Endpoint]
-            Webhook[<fa:fa-webhook> Twilio Webhook]
+            WSEndpoint["WebSocket Endpoint"]
+            Webhook["Twilio Webhook"]
         end
 
         subgraph "Core Logic"
-            VideoService[<fa:fa-cogs> Video Service]
-            LLMService[<fa:fa-brain> LLM Service]
-            DBService[<fa:fa-database> Database Service (Motor)]
+            VideoService["Video Service"]
+            LLMService["LLM Service"]
+            DBService["Database Service - Motor"]
         end
     end
 
     subgraph "External Services"
-        Twilio[<fa:fa-comment-dots> Twilio API]
-        HuggingFace[<fa:fa-robot> Hugging Face API<br>(Video Generation)]
-        Groq[<fa:fa-lightbulb> Groq API<br>(Prompt Analysis)]
-        MongoDB[<fa:fa-leaf> MongoDB Atlas<br>(State, History, Cache)]
-        TempStorage[<fa:fa-file-upload> Temp File Storage]
+        Twilio["Twilio API"]
+        HuggingFace["Hugging Face API\n(Video Generation)"]
+        Groq["Groq API\n(Prompt Analysis)"]
+        MongoDB["MongoDB Atlas\n(State, History, Cache)"]
+        TempStorage["Temp File Storage"]
+        MoviePyLib["MoviePy Library"]
     end
 
     %% --- Web App Flow ---
     WebAppUser -->|"Interacts with"| WebApp
-    WebApp <-->|"<fa:fa-arrows-alt-h> WebSocket"| WSEndpoint
-    WSEndpoint -->|1. Generate Request| VideoService
-    VideoService -->|2. Check Cache| DBService
-    VideoService -->|3. Generate Video| HuggingFace
-    VideoService -->|4. Return Base64 Video| WSEndpoint
-    WSEndpoint -->|5. Stream to Client| WebApp
+    WebApp <-->|"WebSocket"| WSEndpoint
+    WSEndpoint -->|"1. Generate Request"| VideoService
+    VideoService -->|"2. Check Cache"| DBService
+    VideoService -->|"3. Generate Video"| HuggingFace
+    VideoService -->|"4. Return Base64 Video"| WSEndpoint
+    WSEndpoint -->|"5. Stream to Client"| WebApp
 
     %% --- WhatsApp Bot Flow ---
-    WhatsAppUser -->|Sends Message| WhatsAppPlatform
-    WhatsAppPlatform <-->|Forwards Message| Twilio
-    Twilio -->|POST Request| Webhook
-    Webhook -->|1. Get/Set State| DBService
-    Webhook -->|2. Analyze Prompt| LLMService
-    LLMService -->|3. Call LLM| Groq
+    WhatsAppUser -->|"Sends Message"| WhatsAppPlatform
+    WhatsAppPlatform -->|"Forwards Message"| Twilio
+    Twilio -->|"POST Request"| Webhook
+    Webhook -->|"1. Get/Set State"| DBService
+    Webhook -->|"2. Analyze Prompt"| LLMService
+    LLMService -->|"3. Call LLM"| Groq
     Webhook -.->|"4. Trigger Async Task"| VideoService
-    VideoService -->|5. Check Cache/History| DBService
-    VideoService -->|6. Generate Video| HuggingFace
-    VideoService -->|7. Compress Video| MoviePyLib(MoviePy Library)
-    VideoService -->|8. Upload Video| TempStorage
-    TempStorage -->|9. Get Public URL| VideoService
-    VideoService -->|10. Send Message w/ URL| Twilio
-    Twilio -->|11. Delivers Video| WhatsAppPlatform
+    VideoService -->|"5. Check Cache/History"| DBService
+    VideoService -->|"6. Generate Video"| HuggingFace
+    VideoService -->|"7. Compress Video"| MoviePyLib
+    VideoService -->|"8. Upload Video"| TempStorage
+    TempStorage -->|"9. Get Public URL"| VideoService
+    VideoService -->|"10. Send Message w/ URL"| Twilio
+    Twilio -->|"11. Delivers Video"| WhatsAppPlatform
 
     %% --- Database Connection ---
-    DBService <-->|CRUD Operations| MongoDB
-
-    %% --- Styling ---
-    classDef user fill:#e6fffa,stroke:#2a9d8f,stroke-width:2px;
-    classDef backend fill:#e0f2fe,stroke:#0284c7,stroke-width:2px;
-    classDef external fill:#fef9c3,stroke:#eab308,stroke-width:2px;
-    classDef client fill:#f3e8ff,stroke:#8b5cf6,stroke-width:2px;
-
-    class WebAppUser,WhatsAppUser user;
-    class WebApp,WhatsAppPlatform client;
-    class FastAPI,WSEndpoint,Webhook,VideoService,LLMService,DBService backend;
-    class Twilio,HuggingFace,Groq,MongoDB,TempStorage,MoviePyLib external;
+    DBService -->|"CRUD Operations"| MongoDB
 
 ```
 
