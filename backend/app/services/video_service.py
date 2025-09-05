@@ -1,184 +1,193 @@
+# backend/app/services/video_service.py
+
 import asyncio
 import base64
-import time
+import logging
+import os
+import tempfile
+from twilio.rest import Client
+from twilio.base.exceptions import TwilioRestException
+from moviepy import VideoFileClip
+import requests
 from huggingface_hub import InferenceClient
 from huggingface_hub.utils import HfHubHTTPError
-from fastapi import WebSocket, WebSocketDisconnect
-import logging
-import requests
-from twilio.rest import Client
+from fastapi import WebSocket
 
 from ..core.config import settings
+from ..db.database import save_generation_history, clear_user_state
+from . import llm_service 
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- In-Memory Cache ---
+# --- In-memory cache for WebSocket results ---
 video_cache = {}
-
-# --- Style Prefixes for Prompt Enhancement (RAG) ---
-STYLE_PREFIXES = {
-    "Default": "",
-    "Cinematic": "cinematic, dramatic lighting, high detail, 4k, epic,",
-    "Anime": "anime style, key visual, vibrant, studio trigger,",
-    "Pixel Art": "pixel art, 16-bit, retro, old-school,",
-    "Documentary": "documentary style, realistic, high fidelity,",
-    "Fantasy": "fantasy, epic, magical, high detail,",
-    "Sci-Fi": "sci-fi, futuristic, high tech, detailed,",
-}
 
 # --- Twilio Client Initialization ---
 try:
     twilio_client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-    logger.info("Twilio client initialized for video service.")
+    logger.info("Twilio client initialized successfully.")
 except Exception as e:
-    logger.error(f"Failed to initialize Twilio client in video service: {e}")
+    logger.error(f"Failed to initialize Twilio client: {e}")
     twilio_client = None
 
-# --- SYNCHRONOUS HELPER FUNCTIONS (To be run in a separate thread) ---
+# --- Synchronous Helper Functions ---
 
 def _upload_video_to_temp_storage(video_bytes: bytes) -> str:
     """Uploads video bytes to a temporary file host and returns the public URL."""
     try:
         files = {'file': ('video.mp4', video_bytes, 'video/mp4')}
-        # Using a temporary file host for demonstration purposes
-        response = requests.post('https://tmpfiles.org/api/v1/upload', files=files)
+        response = requests.post('https://tmpfiles.org/api/v1/upload', files=files, timeout=60)
         response.raise_for_status()
         data = response.json()
-        # The URL from tmpfiles.org needs to be converted to a direct download link
         return data['data']['url'].replace('tmpfiles.org/', 'tmpfiles.org/dl/')
     except requests.exceptions.RequestException as e:
         logger.error(f"Failed to upload video to temporary storage: {e}")
         return None
 
-def _send_whatsapp_video(to: str, media_url: str, caption: str):
-    """Sends a video message via Twilio."""
+def _compress_video_if_needed(video_bytes: bytes, max_size_mb: int = 15) -> bytes:
+    """Checks video size and compresses it if it exceeds the max size."""
+    max_size_bytes = max_size_mb * 1024 * 1024
+    if len(video_bytes) <= max_size_bytes:
+        logger.info("Video is within size limits. No compression needed.")
+        return video_bytes
+
+    logger.info(f"Video size ({len(video_bytes) / 1024 / 1024:.2f}MB) exceeds {max_size_mb}MB. Compressing...")
+    
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_in:
+        temp_in.write(video_bytes)
+        input_path = temp_in.name
+
+    output_path = f"{input_path.rsplit('.', 1)[0]}_compressed.mp4"
+    
+    try:
+        video_clip = VideoFileClip(input_path)
+        video_clip.write_videofile(output_path, bitrate="1M", logger=None)
+        video_clip.close()
+        with open(output_path, "rb") as f:
+            compressed_bytes = f.read()
+        logger.info(f"Video compressed. New size: {len(compressed_bytes) / 1024 / 1024:.2f}MB")
+        return compressed_bytes
+    except Exception as e:
+        logger.error(f"Failed to compress video: {e}")
+        return video_bytes
+    finally:
+        if os.path.exists(input_path):
+            os.remove(input_path)
+        if os.path.exists(output_path):
+            os.remove(output_path)
+
+def _send_whatsapp_message(to: str, message: str = None, media_url: str = None):
+    """Sends a message (text or media) via Twilio."""
     if not twilio_client:
-        logger.error("Twilio client not available. Cannot send video.")
+        logger.error("Twilio client not available.")
         return
     try:
-        twilio_client.messages.create(
-            from_=f'whatsapp:{settings.TWILIO_WHATSAPP_NUMBER}',
-            body=caption,
-            media_url=[media_url],
-            to=f'whatsapp:{to}'
-        )
-        logger.info(f"Video sent successfully to {to}")
+        message_payload = {
+            'from_': f'whatsapp:{settings.TWILIO_WHATSAPP_NUMBER}',
+            'to': f'whatsapp:{to}'
+        }
+        if message:
+            message_payload['body'] = message
+        if media_url:
+            message_payload['media_url'] = [media_url]
+
+        twilio_client.messages.create(**message_payload)
+        log_msg = f"Message send request accepted by Twilio for {to}."
+        if media_url:
+            log_msg = f"Video send request accepted by Twilio for {to}."
+        logger.info(log_msg)
+
+    except TwilioRestException as e:
+        logger.error(f"Twilio API Error sending message to {to}: {e}")
     except Exception as e:
-        logger.error(f"Failed to send WhatsApp video to {to}: {e}")
-        _send_whatsapp_text(to, "Sorry, I couldn't send the video file, but it was generated. You can try again.")
+        logger.error(f"An unexpected error occurred sending WhatsApp message to {to}: {e}")
 
-def _send_whatsapp_text(to: str, message: str):
-    """Sends a text message via Twilio."""
-    if not twilio_client:
-        return
+# --- Core Background Task for WhatsApp Video Generation ---
+async def generate_video_task(user_phone_number: str, original_prompt: str, enhanced_prompt: str, style: str):
+    """The main background task for generating and sending a video for the WhatsApp bot."""
+    success = False
+    loop = asyncio.get_running_loop()
     try:
-        twilio_client.messages.create(
-            from_=f'whatsapp:{settings.TWILIO_WHATSAPP_NUMBER}',
-            body=message,
-            to=f'whatsapp:{to}'
-        )
-    except Exception as e:
-        logger.error(f"Failed to send fallback text to {to}: {e}")
-
-# --- ASYNCHRONOUS WRAPPERS ---
-
-async def _upload_video_to_temp_storage_async(video_bytes: bytes) -> str:
-    """Asynchronously uploads video bytes by running the sync function in a thread."""
-    return await asyncio.to_thread(_upload_video_to_temp_storage, video_bytes)
-
-async def _send_whatsapp_video_async(to: str, media_url: str, caption: str):
-    """Asynchronously sends a video message via Twilio."""
-    await asyncio.to_thread(_send_whatsapp_video, to, media_url, caption)
-
-async def _send_whatsapp_text_async(to: str, message: str):
-    """Asynchronously sends a text message via Twilio."""
-    await asyncio.to_thread(_send_whatsapp_text, to, message)
-
-
-# --- Core Service Functions ---
-
-async def generate_video_for_whatsapp(prompt: str, style: str, user_phone_number: str):
-    """
-    Main service function for the WhatsApp bot flow.
-    """
-    try:
-        style_prefix = STYLE_PREFIXES.get(style, "")
-        full_prompt = f"{style_prefix} {prompt}"
-        logger.info(f"WhatsApp - Enhanced prompt: {full_prompt}")
-
-        cache_key = f"{style}:{prompt}"
-        if cache_key in video_cache:
-            logger.info("WhatsApp - Cache hit!")
-            cached_data = video_cache[cache_key]
-            caption = "✅ Here's your video (from cache)!"
-            await _send_whatsapp_video_async(user_phone_number, cached_data['media_url'], caption)
-            return
-
-        logger.info("WhatsApp - Generating video...")
-        client = InferenceClient(token=settings.HUGGING_FACE_API_KEY, provider='fal-ai')
-        video_bytes = await asyncio.to_thread(
-            client.text_to_video, full_prompt, model="Wan-AI/Wan2.2-T2V-A14B"
+        await _send_whatsapp_message_async(to=user_phone_number, message="🤖 The AI is working its magic... This can take a minute.")
+        
+        client = InferenceClient(provider="fal-ai", token=settings.HUGGING_FACE_API_KEY)
+        
+        video_bytes = await loop.run_in_executor(
+            None,
+            lambda: client.text_to_video(
+                enhanced_prompt, 
+                model="Wan-AI/Wan2.2-T2V-A14B"
+            )
         )
         
-        logger.info("WhatsApp - Uploading video to temporary storage...")
-        media_url = await _upload_video_to_temp_storage_async(video_bytes)
+        await _send_whatsapp_message_async(to=user_phone_number, message="⬆️ Compressing and preparing your video file...")
+        
+        compressed_bytes = await loop.run_in_executor(None, _compress_video_if_needed, video_bytes)
+        media_url = await loop.run_in_executor(None, _upload_video_to_temp_storage, compressed_bytes)
 
         if not media_url:
-            raise Exception("Failed to get a public URL for the video.")
+            raise Exception("Failed to upload video to temporary storage.")
 
-        caption = "✅ Here's your AI-generated video! Send another prompt to create more."
-        await _send_whatsapp_video_async(user_phone_number, media_url, caption)
+        caption = f"✅ Here's your '{style}' video!\n\n*Prompt:* _{original_prompt}_"
+        await _send_whatsapp_message_async(to=user_phone_number, message=caption, media_url=media_url)
         
-        video_cache[cache_key] = {"media_url": media_url}
+        await save_generation_history(user_phone_number, original_prompt, style, media_url)
+        success = True
 
     except HfHubHTTPError as e:
         logger.error(f"Hugging Face API Error for {user_phone_number}: {e}")
-        error_message = "Sorry, the AI model is currently busy or unavailable. Please try again in a moment."
-        await _send_whatsapp_text_async(user_phone_number, error_message)
+        await _send_whatsapp_message_async(user_phone_number, f"Sorry, the AI model is currently busy or unavailable. Details: {e}")
     except Exception as e:
         logger.error(f"An unexpected error occurred for {user_phone_number}: {e}")
-        error_message = "😔 Apologies, something went wrong on my end. Please try a different prompt or check back later."
-        await _send_whatsapp_text_async(user_phone_number, error_message)
+        await _send_whatsapp_message_async(user_phone_number, "😔 Apologies, something went wrong on my end. Please try again later.")
+    finally:
+        logger.info(f"Background task finished for {user_phone_number}. Success: {success}")
+        await clear_user_state(user_phone_number)
 
-
-async def generate_video_from_prompt(prompt: str, style: str, websocket: WebSocket):
-    """
-    Core service function for the web app (uses WebSockets).
-    """
+# --- WebSocket Video Generation (for Web App) ---
+async def generate_video_for_websocket(prompt: str, style: str, websocket: WebSocket):
+    """Handles video generation for the web app via WebSockets, ensuring it remains functional."""
+    loop = asyncio.get_running_loop()
     try:
-        style_prefix = STYLE_PREFIXES.get(style, "")
-        full_prompt = f"{style_prefix} {prompt}"
-        await websocket.send_json({"status": f"Enhanced prompt..."})
+        # The web app uses a simpler prompt enhancement logic with default styles
+        style_prefix = llm_service.DEFAULT_STYLES.get(style, "")
+        full_prompt = f"{style_prefix} {prompt}".strip()
+        logger.info(f"WebSocket - Enhanced prompt: {full_prompt}")
 
         cache_key = f"{style}:{prompt}"
         if cache_key in video_cache:
-            # For web, we need video_base64, so we must handle cache differently
-            # This part needs adjustment if web app is still a primary feature
-            logger.info("Web App - Cache hit. Re-encoding is needed for web.")
-        
-        await websocket.send_json({"status": "Initializing AI model..."})
-        client = InferenceClient(token=settings.HUGGING_FACE_API_KEY)
+            logger.info(f"WebSocket cache hit for: {cache_key}")
+            await websocket.send_json({"video": video_cache[cache_key]})
+            return
 
-        await websocket.send_json({"status": "Generating video... This can take a minute."})
-        video_bytes = await asyncio.to_thread(
-            client.text_to_video,
-            full_prompt,
-            model="cerspense/zeroscope_v2_576w"
+        await websocket.send_json({"status": "Generating video..."})
+
+        client = InferenceClient(provider="fal-ai", token=settings.HUGGING_FACE_API_KEY)
+
+        video_bytes = await loop.run_in_executor(
+            None,
+            lambda: client.text_to_video(
+                full_prompt, 
+                model="Wan-AI/Wan2.2-T2V-A14B"
+            )
         )
-        video_base64 = base64.b64encode(video_bytes).decode("utf-8")
         
-        response_data = {"video": video_base64}
-        # Caching for the web app would need to store the base64 string
-        # video_cache[cache_key] = response_data
+        await websocket.send_json({"status": "Encoding video..."})
+        video_base64 = base64.b64encode(video_bytes).decode('utf-8')
         
-        await websocket.send_json(response_data)
+        video_cache[cache_key] = video_base64 # Save to in-memory cache
+        await websocket.send_json({"video": video_base64})
 
     except HfHubHTTPError as e:
-        logger.error(f"Hugging Face API Error: {e}")
-        await websocket.send_json({"error": "The AI model is currently busy or unavailable. Please try again later."})
+        logger.error(f"Hugging Face API Error for WebSocket: {e}")
+        await websocket.send_json({"error": "AI model is busy. Please try again."})
     except Exception as e:
-        logger.error(f"An unexpected error occurred: {e}")
-        await websocket.send_json({"error": "An internal error occurred during video generation."})
+        logger.error(f"An unexpected error occurred for WebSocket: {e}")
+        await websocket.send_json({"error": "An internal server error occurred."})
+
+async def _send_whatsapp_message_async(to: str, message: str = None, media_url: str = None):
+    """Asynchronously sends a message."""
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _send_whatsapp_message, to, message, media_url)
 

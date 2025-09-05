@@ -1,5 +1,5 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from app.services.video_service import generate_video_from_prompt
+from app.services.video_service import generate_video_for_websocket
 
 router = APIRouter()
 
@@ -30,7 +30,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
             if prompt and style:
                 # Call the service function to handle the generation process
-                await generate_video_from_prompt(prompt, style, websocket)
+                await generate_video_for_websocket(prompt, style, websocket)
             else:
                 await websocket.send_json({"error": "Prompt and style are required."})
 
